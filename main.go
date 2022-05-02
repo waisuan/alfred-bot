@@ -1,6 +1,7 @@
 package main
 
 import (
+	"alfred-bot/commands/rota"
 	"context"
 	"errors"
 	"fmt"
@@ -13,6 +14,8 @@ import (
 	"strings"
 	"time"
 )
+
+var rotaCommand = rota.NewCommand()
 
 func main() {
 	_ = godotenv.Load(".env")
@@ -53,7 +56,7 @@ func listenToEvents(ctx context.Context, client *slack.Client, socketClient *soc
 
 				err := handleEventMessage(eventsAPIEvent, client)
 				if err != nil {
-					log.Fatal(err)
+					log.Println(err)
 				}
 			case socketmode.EventTypeSlashCommand:
 				command, ok := event.Data.(slack.SlashCommand)
@@ -64,7 +67,8 @@ func listenToEvents(ctx context.Context, client *slack.Client, socketClient *soc
 
 				payload, err := handleSlashCommand(command, client)
 				if err != nil {
-					log.Fatal(err)
+					log.Println(err)
+					continue
 				}
 
 				socketClient.Ack(*event.Request, payload)
@@ -77,8 +81,10 @@ func listenToEvents(ctx context.Context, client *slack.Client, socketClient *soc
 
 				err := handleInteractionEvent(interaction, client)
 				if err != nil {
-					log.Fatal(err)
+					log.Println(err)
+					continue
 				}
+
 				socketClient.Ack(*event.Request)
 			}
 		}
@@ -94,6 +100,10 @@ func handleEventMessage(event slackevents.EventsAPIEvent, client *slack.Client) 
 			err := handleAppMentionEvent(ev, client)
 			if err != nil {
 				return err
+			}
+		case *slackevents.MessageEvent:
+			if ev.Text == "I need help!" && ev.ThreadTimeStamp == "" {
+				client.PostMessage(ev.Channel, slack.MsgOptionText("Hi, I'm here!", false), slack.MsgOptionTS(ev.TimeStamp))
 			}
 		}
 	default:
@@ -145,7 +155,7 @@ func handleSlashCommand(command slack.SlashCommand, client *slack.Client) (inter
 	case "/question":
 		return handleQuestionCommand(command, client)
 	case "/rota":
-		return handleRotaCommand(command, client)
+		return rotaCommand.HandlePrompt(command, client)
 	}
 	return nil, nil
 }
@@ -205,53 +215,12 @@ func handleInteractionEvent(interaction slack.InteractionCallback, client *slack
 	case slack.InteractionTypeBlockActions:
 		for _, action := range interaction.ActionCallback.BlockActions {
 			log.Printf("%+v", action)
-			log.Println("Action type:  ", action.Type)
-			switch action.Type {
-			case "multi_users_select":
-				var users []string
-				for _, userId := range action.SelectedUsers {
-					user, err := client.GetUserInfo(userId)
-					if err != nil {
-						return err
-					}
-					users = append(users, fmt.Sprintf("<@%s>", user.ID))
-				}
-
-				attachment := slack.Attachment{}
-				attachment.Text = fmt.Sprintf("Rota members: %s", strings.Join(users, ", "))
-				attachment.Color = "#4af030"
-
-				_, _, err := client.PostMessage(interaction.Channel.ID, slack.MsgOptionAttachments(attachment))
-				if err != nil {
-					return err
-				}
+			switch action.ActionID {
+			case "select_rota_members":
+				return rotaCommand.HandleSelection(action, client)
 			}
 		}
 	}
 
 	return nil
-}
-
-func handleRotaCommand(command slack.SlashCommand, client *slack.Client) (interface{}, error) {
-	multiSelect := slack.NewOptionsMultiSelectBlockElement(slack.MultiOptTypeUser,
-		&slack.TextBlockObject{Text: "Select members of your rota", Type: slack.PlainTextType},
-		"select_rota_members",
-	)
-	accessory := slack.NewAccessory(multiSelect)
-
-	attachment := slack.Attachment{}
-	attachment.Blocks = slack.Blocks{
-		BlockSet: []slack.Block{
-			slack.NewSectionBlock(
-				&slack.TextBlockObject{
-					Type: slack.MarkdownType,
-					Text: "Who should be in this rota?",
-				},
-				nil,
-				accessory,
-			),
-		},
-	}
-
-	return attachment, nil
 }

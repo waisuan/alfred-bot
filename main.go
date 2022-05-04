@@ -216,8 +216,11 @@ func handleInteractionEvent(interaction slack.InteractionCallback, client *slack
 		for _, action := range interaction.ActionCallback.BlockActions {
 			log.Printf("%+v", action)
 			switch action.ActionID {
-			case "select_rota_members":
+			case rota.SelectRotaMembersAction:
 				return rotaCommand.HandleSelection(action, client)
+			case rota.StartRotaAction:
+				rotaCommand.StartRota(action, client)
+				return nil
 			}
 		}
 	}

@@ -22,16 +22,13 @@ func NewCommand() *Command {
 	}
 }
 
-func (c *Command) Start(client *slack.Client) {
-	go func() {
-		for {
-			for idx, member := range c.rotaList {
-				if c.currOnCallMember == member {
-					c.currOnCallMember = c.rotaList[(idx+1)%len(c.rotaList)]
-					break
-				}
-			}
+const SelectRotaMembersAction = "select_rota_members"
+const StartRotaAction = "start_rota"
 
+func (c *Command) StartRota(action *slack.BlockAction, client *slack.Client) {
+	go func() {
+		c.currOnCallMember = action.Value
+		for {
 			if c.currOnCallMember != "" {
 				attachment := slack.Attachment{}
 				attachment.Text = fmt.Sprintf("The new on-call person is: %s", atUserId(c.currOnCallMember))
@@ -43,6 +40,13 @@ func (c *Command) Start(client *slack.Client) {
 			}
 
 			time.Sleep(30 * time.Second)
+
+			for idx, member := range c.rotaList {
+				if c.currOnCallMember == member {
+					c.currOnCallMember = c.rotaList[(idx+1)%len(c.rotaList)]
+					break
+				}
+			}
 		}
 	}()
 }
@@ -50,7 +54,7 @@ func (c *Command) Start(client *slack.Client) {
 func (c *Command) HandlePrompt(command slack.SlashCommand, client *slack.Client) (interface{}, error) {
 	multiSelect := &slack.MultiSelectBlockElement{
 		Type:         slack.MultiOptTypeUser,
-		ActionID:     "select_rota_members",
+		ActionID:     SelectRotaMembersAction,
 		Placeholder:  &slack.TextBlockObject{Text: "Select members of your rota", Type: slack.PlainTextType},
 		InitialUsers: c.rotaList,
 	}
@@ -114,37 +118,47 @@ func (c *Command) HandleSelection(action *slack.BlockAction, client *slack.Clien
 
 	var postSelectionText string
 	if len(c.rotaList) > 0 {
-		c.currOnCallMember = c.rotaList[0]
-		// attachment.Pretext = fmt.Sprintf("The current on-call person is: %s", atUserId(c.currOnCallMember))
 		postSelectionText = fmt.Sprintf("The rota now consists of:\n%s", c.formattedRotaMemberList())
 	} else {
 		postSelectionText = "There are no members set to the rota."
 	}
 
-	multiSelect := &slack.ButtonBlockElement{
-		Type:     "button",
-		ActionID: "start_rota",
-		Text:     &slack.TextBlockObject{Text: "Start the rota", Type: slack.PlainTextType},
-	}
+	var blocks []slack.Block
+	blocks = append(blocks,
+		slack.NewSectionBlock(
+			&slack.TextBlockObject{
+				Type: slack.MarkdownType,
+				Text: postSelectionText,
+			},
+			nil,
+			nil,
+		),
+	)
 
-	accessory := slack.NewAccessory(multiSelect)
-
-	//slack.NewActionBlock()
-
-	attachment := slack.Attachment{}
-	attachment.Color = "#4af030"
-	attachment.Blocks = slack.Blocks{
-		BlockSet: []slack.Block{
+	if len(c.rotaList) > 0 {
+		blocks = append(blocks,
 			slack.NewSectionBlock(
 				&slack.TextBlockObject{
 					Type: slack.MarkdownType,
-					Text: postSelectionText,
+					Text: fmt.Sprintf("The new on-call person will be %s", atUserId(c.rotaList[0])),
 				},
 				nil,
-				accessory,
+				slack.NewAccessory(
+					&slack.ButtonBlockElement{
+						Type:     "button",
+						ActionID: StartRotaAction,
+						Text:     &slack.TextBlockObject{Text: "Start the rota", Type: slack.PlainTextType},
+						Style:    slack.StylePrimary,
+						Value:    c.rotaList[0],
+					},
+				),
 			),
-		},
+		)
 	}
+
+	attachment := slack.Attachment{}
+	attachment.Color = "#4af030"
+	attachment.Blocks = slack.Blocks{BlockSet: blocks}
 
 	_, _, err := client.PostMessage(c.channelId, slack.MsgOptionAttachments(attachment))
 	if err != nil {

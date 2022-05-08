@@ -24,8 +24,36 @@ func NewCommand() *Command {
 
 const SelectRotaMembersAction = "select_rota_members"
 const StartRotaAction = "start_rota"
+const rotaActions = "rota_actions"
+const StopRotaAction = "stop_rota"
 
 func (c *Command) StartRota(action *slack.BlockAction, client *slack.Client) {
+	if len(c.rotaList) == 0 {
+		attachment := slack.Attachment{}
+		attachment.Text = fmt.Sprintf("Sorry, I can't start an empty rota!")
+		attachment.Color = "#f0303a"
+
+		_, _, err := client.PostMessage(c.channelId, slack.MsgOptionAttachments(attachment))
+		if err != nil {
+			log.Println(err)
+		}
+
+		return
+	}
+
+	if c.currOnCallMember != "" {
+		attachment := slack.Attachment{}
+		attachment.Text = fmt.Sprintf("The rota has already begun. The current on-call person is: %s", atUserId(c.currOnCallMember))
+		attachment.Color = "#f0303a"
+
+		_, _, err := client.PostMessage(c.channelId, slack.MsgOptionAttachments(attachment))
+		if err != nil {
+			log.Println(err)
+		}
+
+		return
+	}
+
 	go func() {
 		c.currOnCallMember = action.Value
 		for {
@@ -49,6 +77,20 @@ func (c *Command) StartRota(action *slack.BlockAction, client *slack.Client) {
 			}
 		}
 	}()
+}
+
+func (c *Command) StopRota(client *slack.Client) error {
+	c.currOnCallMember = ""
+
+	attachment := slack.Attachment{}
+	attachment.Text = fmt.Sprintf("OK, I've stopped your rota!")
+	attachment.Color = "#4af030"
+	_, _, err := client.PostMessage(c.channelId, slack.MsgOptionAttachments(attachment))
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (c *Command) HandlePrompt(command slack.SlashCommand, client *slack.Client) (interface{}, error) {
@@ -98,6 +140,35 @@ func (c *Command) HandlePrompt(command slack.SlashCommand, client *slack.Client)
 			accessory,
 		),
 	)
+
+	if len(c.rotaList) > 0 {
+		if c.currOnCallMember == "" {
+			blocks = append(blocks,
+				slack.NewActionBlock(
+					rotaActions,
+					&slack.ButtonBlockElement{
+						Type:     "button",
+						ActionID: StartRotaAction,
+						Text:     &slack.TextBlockObject{Text: "Start the rota", Type: slack.PlainTextType},
+						Style:    slack.StylePrimary,
+						Value:    c.rotaList[0],
+					},
+				),
+			)
+		} else {
+			blocks = append(blocks,
+				slack.NewActionBlock(
+					rotaActions,
+					&slack.ButtonBlockElement{
+						Type:     "button",
+						ActionID: StopRotaAction,
+						Text:     &slack.TextBlockObject{Text: "Stop the rota", Type: slack.PlainTextType},
+						Style:    slack.StyleDanger,
+					},
+				),
+			)
+		}
+	}
 
 	attachment := slack.Attachment{}
 	attachment.Blocks = slack.Blocks{BlockSet: blocks}

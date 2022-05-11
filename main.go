@@ -4,6 +4,11 @@ import (
 	"alfred-bot/commands/rota"
 	"context"
 	"errors"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/joho/godotenv"
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
@@ -12,9 +17,12 @@ import (
 	"os"
 )
 
-var rotaCommand = rota.NewCommand()
+var rotaCommand *rota.Command
 
 func main() {
+	db := initDatabase()
+	rotaCommand = rota.NewCommand(db)
+
 	_ = godotenv.Load(".env")
 
 	token := os.Getenv("SLACK_AUTH_TOKEN")
@@ -119,7 +127,7 @@ func handleInteractionEvent(interaction slack.InteractionCallback, client *slack
 			log.Printf("%+v", action)
 			switch action.ActionID {
 			case rota.SelectRotaMembersAction:
-				return rotaCommand.HandleSelection(action, client)
+				return rotaCommand.HandleSelection(interaction.Channel, action, client)
 			case rota.StartRotaAction:
 				rotaCommand.StartRota(action, client)
 				return nil
@@ -130,4 +138,52 @@ func handleInteractionEvent(interaction slack.InteractionCallback, client *slack
 	}
 
 	return nil
+}
+
+func initDatabase() *dynamodb.Client {
+	cfg, err := config.LoadDefaultConfig(context.TODO())
+	if err != nil {
+		panic(err)
+	}
+
+	svc := dynamodb.NewFromConfig(cfg, func(options *dynamodb.Options) {
+		options.Region = "eu-central-1"
+		options.Credentials = credentials.StaticCredentialsProvider{
+			Value: aws.Credentials{AccessKeyID: "dummy", SecretAccessKey: "dummy"},
+		}
+		options.EndpointResolver = dynamodb.EndpointResolverFromURL("http://localhost:8000")
+	})
+
+	_, err = svc.DescribeTable(context.TODO(), &dynamodb.DescribeTableInput{TableName: aws.String(rota.TableName)})
+	if err != nil {
+		_, err := svc.CreateTable(context.TODO(), &dynamodb.CreateTableInput{
+			AttributeDefinitions: []types.AttributeDefinition{
+				{
+					AttributeName: aws.String("pk"),
+					AttributeType: types.ScalarAttributeTypeS,
+				},
+				{
+					AttributeName: aws.String("sk"),
+					AttributeType: types.ScalarAttributeTypeS,
+				},
+			},
+			KeySchema: []types.KeySchemaElement{
+				{
+					AttributeName: aws.String("pk"),
+					KeyType:       types.KeyTypeHash,
+				},
+				{
+					AttributeName: aws.String("sk"),
+					KeyType:       types.KeyTypeRange,
+				},
+			},
+			TableName:   aws.String(rota.TableName),
+			BillingMode: types.BillingModePayPerRequest,
+		})
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	return svc
 }

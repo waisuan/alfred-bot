@@ -1,7 +1,12 @@
 package rota
 
 import (
+	"context"
 	"fmt"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/slack-go/slack"
 	"log"
 	"strings"
@@ -12,16 +17,19 @@ type Command struct {
 	currOnCallMember string
 	rotaList         []string
 	channelId        string
+	db               *dynamodb.Client
 }
 
-func NewCommand() *Command {
+func NewCommand(db *dynamodb.Client) *Command {
 	return &Command{
 		currOnCallMember: "",
 		rotaList:         []string{},
 		channelId:        "C03C9SC7EH1",
+		db:               db,
 	}
 }
 
+const TableName = "rotas"
 const SelectRotaMembersAction = "select_rota_members"
 const StartRotaAction = "start_rota"
 const rotaActions = "rota_actions"
@@ -94,14 +102,24 @@ func (c *Command) StopRota(client *slack.Client) error {
 }
 
 func (c *Command) HandlePrompt(command slack.SlashCommand, client *slack.Client) (interface{}, error) {
-	multiSelect := &slack.MultiSelectBlockElement{
-		Type:         slack.MultiOptTypeUser,
-		ActionID:     SelectRotaMembersAction,
-		Placeholder:  &slack.TextBlockObject{Text: "Select members of your rota", Type: slack.PlainTextType},
-		InitialUsers: c.rotaList,
+	out, err := c.db.GetItem(context.TODO(), &dynamodb.GetItemInput{
+		TableName: aws.String(TableName),
+		Key: map[string]types.AttributeValue{
+			"pk": &types.AttributeValueMemberS{Value: command.ChannelID},
+			"sk": &types.AttributeValueMemberS{Value: "details"},
+		},
+	})
+	if err != nil {
+		return nil, err
 	}
 
-	accessory := slack.NewAccessory(multiSelect)
+	var tmp struct {
+		Pk      string   `json:"pk"`
+		Sk      string   `json:"sk"`
+		Members []string `json:"members"`
+	}
+	_ = attributevalue.UnmarshalMap(out.Item, &tmp)
+	c.rotaList = append(c.rotaList, tmp.Members...)
 
 	var currRotaMembersText string
 	var currOnCallMemberText string
@@ -116,6 +134,15 @@ func (c *Command) HandlePrompt(command slack.SlashCommand, client *slack.Client)
 	} else {
 		currRotaMembersText = "The rota is empty. Shall we pull in some members?"
 	}
+
+	multiSelect := &slack.MultiSelectBlockElement{
+		Type:         slack.MultiOptTypeUser,
+		ActionID:     SelectRotaMembersAction,
+		Placeholder:  &slack.TextBlockObject{Text: "Select members of your rota", Type: slack.PlainTextType},
+		InitialUsers: c.rotaList,
+	}
+
+	accessory := slack.NewAccessory(multiSelect)
 
 	var blocks []slack.Block
 	if currOnCallMemberText != "" {
@@ -176,7 +203,7 @@ func (c *Command) HandlePrompt(command slack.SlashCommand, client *slack.Client)
 	return attachment, nil
 }
 
-func (c *Command) HandleSelection(action *slack.BlockAction, client *slack.Client) error {
+func (c *Command) HandleSelection(channel slack.Channel, action *slack.BlockAction, client *slack.Client) error {
 	c.rotaList = []string{}
 	c.currOnCallMember = ""
 	for _, userId := range action.SelectedUsers {
@@ -190,6 +217,23 @@ func (c *Command) HandleSelection(action *slack.BlockAction, client *slack.Clien
 	var postSelectionText string
 	if len(c.rotaList) > 0 {
 		postSelectionText = fmt.Sprintf("The rota now consists of:\n%s", c.formattedRotaMemberList())
+
+		var membersAttr []types.AttributeValue
+		for _, v := range c.rotaList {
+			membersAttr = append(membersAttr, &types.AttributeValueMemberS{Value: v})
+		}
+
+		_, err := c.db.PutItem(context.TODO(), &dynamodb.PutItemInput{
+			TableName: aws.String(TableName),
+			Item: map[string]types.AttributeValue{
+				"pk":      &types.AttributeValueMemberS{Value: channel.ID},
+				"sk":      &types.AttributeValueMemberS{Value: "details"},
+				"members": &types.AttributeValueMemberL{Value: membersAttr},
+			},
+		})
+		if err != nil {
+			return err
+		}
 	} else {
 		postSelectionText = "There are no members set to the rota."
 	}

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"alfred-bot/commands/rota"
 	"context"
 	"errors"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -17,11 +16,11 @@ import (
 	"os"
 )
 
-var rotaCommand *rota.Command
+var rotaCommand *Command
 
 func main() {
 	db := initDatabase()
-	rotaCommand = rota.NewCommand(db)
+	rotaCommand = NewCommand(db)
 
 	_ = godotenv.Load(".env")
 
@@ -84,10 +83,18 @@ func listenToEvents(ctx context.Context, client *slack.Client, socketClient *soc
 					continue
 				}
 
-				err := handleInteractionEvent(interaction, client)
+				payload, err := handleInteractionEvent(interaction, client)
 				if err != nil {
 					log.Println(err)
 					continue
+				}
+
+				if payload != nil {
+					_, err := client.PostEphemeral(interaction.Channel.ID, interaction.User.ID, slack.MsgOptionAttachments(*payload))
+					if err != nil {
+						log.Println(err)
+						continue
+					}
 				}
 
 				socketClient.Ack(*event.Request)
@@ -120,24 +127,23 @@ func handleSlashCommand(command slack.SlashCommand, client *slack.Client) (inter
 	return nil, nil
 }
 
-func handleInteractionEvent(interaction slack.InteractionCallback, client *slack.Client) error {
+func handleInteractionEvent(interaction slack.InteractionCallback, client *slack.Client) (*slack.Attachment, error) {
+	log.Println(">>> " + interaction.Type)
 	switch interaction.Type {
 	case slack.InteractionTypeBlockActions:
 		for _, action := range interaction.ActionCallback.BlockActions {
-			log.Printf("%+v", action)
 			switch action.ActionID {
-			case rota.SelectRotaMembersAction:
+			case SelectRotaMembersAction:
 				return rotaCommand.HandleSelection(interaction.Channel, action, client)
-			case rota.StartRotaAction:
-				rotaCommand.StartRota(action, client)
-				return nil
-			case rota.StopRotaAction:
-				return rotaCommand.StopRota(client)
+			case StartRotaAction:
+				return rotaCommand.StartRota(interaction.Channel, action, client)
+			case StopRotaAction:
+				return nil, rotaCommand.StopRota(client)
 			}
 		}
 	}
 
-	return nil
+	return nil, nil
 }
 
 func initDatabase() *dynamodb.Client {
@@ -154,7 +160,7 @@ func initDatabase() *dynamodb.Client {
 		options.EndpointResolver = dynamodb.EndpointResolverFromURL("http://localhost:8000")
 	})
 
-	_, err = svc.DescribeTable(context.TODO(), &dynamodb.DescribeTableInput{TableName: aws.String(rota.TableName)})
+	_, err = svc.DescribeTable(context.TODO(), &dynamodb.DescribeTableInput{TableName: aws.String(TableName)})
 	if err != nil {
 		_, err := svc.CreateTable(context.TODO(), &dynamodb.CreateTableInput{
 			AttributeDefinitions: []types.AttributeDefinition{
@@ -177,7 +183,7 @@ func initDatabase() *dynamodb.Client {
 					KeyType:       types.KeyTypeRange,
 				},
 			},
-			TableName:   aws.String(rota.TableName),
+			TableName:   aws.String(TableName),
 			BillingMode: types.BillingModePayPerRequest,
 		})
 		if err != nil {

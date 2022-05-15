@@ -128,12 +128,14 @@ func (b *Bot) handleInteractionEvent(interaction slack.InteractionCallback) erro
 	case slack.InteractionTypeBlockActions:
 		for _, action := range interaction.ActionCallback.BlockActions {
 			switch action.ActionID {
+			case SelectRotaAction:
+				return b.rotaCommand.PromptRotaDetails(&interaction, action)
 			case StartRotaAction:
 				return b.rotaCommand.StartRota(&interaction, action)
 			case StopRotaAction:
 				return b.rotaCommand.StopRota()
 			case UpdateRotaPromptAction:
-				return b.rotaCommand.UpdateRotaPrompt(interaction.Channel, interaction.TriggerID, action)
+				return b.rotaCommand.UpdateRotaPrompt(&interaction, action)
 			}
 		}
 	case slack.InteractionTypeViewSubmission:

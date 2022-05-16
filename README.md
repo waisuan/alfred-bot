@@ -1,6 +1,6 @@
 # About
 
-Your friendly neighbourhood bot to aid in your every rota needs!
+Your friendly neighbourhood bot to aid in your everyday rota needs!
 
 # Quickstart
 

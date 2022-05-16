@@ -44,11 +44,14 @@ const rotaNameBlock = "rota_name"
 const rotaMembersBlock = "rota_members"
 const UpdateRotaCallback = "update_rota"
 const SelectRotaAction = "select_rota"
+const promptActions = "prompt_actions"
+const CreateRotaPromptAction = "create_rota_prompt"
+const CreateRotaCallback = "create_rota"
 
 func (c *RotaCommand) StartRota(interaction *slack.InteractionCallback, action *slack.BlockAction) error {
 	channelId := interaction.Channel.ID
 
-	rotaDetails, err := c.getRotaDetails(channelId, "details")
+	rotaDetails, err := c.getRotaDetails(channelId, action.Value)
 	if err != nil {
 		return err
 	}
@@ -81,21 +84,21 @@ func (c *RotaCommand) StartRota(interaction *slack.InteractionCallback, action *
 		return nil
 	}
 
-	newOnCallMember := action.Value
-	if newOnCallMember != "" {
-		err := c.updateOnCallMember(channelId, "details", newOnCallMember)
-		if err != nil {
-			return err
-		}
-
-		attachment := slack.Attachment{}
-		attachment.Text = fmt.Sprintf("The new on-call person is: %s", atUserId(newOnCallMember))
-		attachment.Color = "#4af030"
-		_, _, err = c.client.PostMessage(channelId, slack.MsgOptionAttachments(attachment))
-		if err != nil {
-			return err
-		}
-	}
+	//newOnCallMember := action.Value
+	//if newOnCallMember != "" {
+	//	err := c.updateOnCallMember(channelId, "details", newOnCallMember)
+	//	if err != nil {
+	//		return err
+	//	}
+	//
+	//	attachment := slack.Attachment{}
+	//	attachment.Text = fmt.Sprintf("The new on-call person is: %s", atUserId(newOnCallMember))
+	//	attachment.Color = "#4af030"
+	//	_, _, err = c.client.PostMessage(channelId, slack.MsgOptionAttachments(attachment))
+	//	if err != nil {
+	//		return err
+	//	}
+	//}
 
 	//go func() {
 	//	newOnCallMember := action.Value
@@ -144,33 +147,52 @@ func (c *RotaCommand) Prompt(command slack.SlashCommand) (interface{}, error) {
 		return nil, err
 	}
 
+	var mainPromptBlock *slack.SectionBlock
 	if len(rotaNames) == 0 {
-		// TODO
-	}
+		mainPromptBlock = slack.NewSectionBlock(
+			&slack.TextBlockObject{
+				Type: slack.PlainTextType,
+				Text: "Looks like this channel does not have any rotas. Shall we create one?",
+			},
+			nil,
+			nil,
+		)
+	} else {
+		optionBlockObjects := make([]*slack.OptionBlockObject, 0, len(rotaNames))
+		for _, v := range rotaNames {
+			optionText := slack.NewTextBlockObject(slack.PlainTextType, v, false, false)
+			optionBlockObjects = append(optionBlockObjects, slack.NewOptionBlockObject(v, optionText, nil))
+		}
 
-	optionBlockObjects := make([]*slack.OptionBlockObject, 0, len(rotaNames))
-	for _, v := range rotaNames {
-		optionText := slack.NewTextBlockObject(slack.PlainTextType, v, false, false)
-		optionBlockObjects = append(optionBlockObjects, slack.NewOptionBlockObject(v, optionText, nil))
+		mainPromptBlock = slack.NewSectionBlock(
+			&slack.TextBlockObject{
+				Type: slack.PlainTextType,
+				Text: "Which rota do you want to look at?",
+			},
+			nil,
+			slack.NewAccessory(
+				slack.NewOptionsSelectBlockElement(
+					slack.OptTypeStatic,
+					nil,
+					SelectRotaAction,
+					optionBlockObjects...,
+				),
+			),
+		)
 	}
 
 	attachment := slack.Attachment{}
 	attachment.Blocks = slack.Blocks{
 		BlockSet: []slack.Block{
-			slack.NewSectionBlock(
-				&slack.TextBlockObject{
-					Type: slack.PlainTextType,
-					Text: "Which rota do you want to look at?",
+			mainPromptBlock,
+			slack.NewActionBlock(
+				promptActions,
+				&slack.ButtonBlockElement{
+					Type:     "button",
+					ActionID: CreateRotaPromptAction,
+					Text:     &slack.TextBlockObject{Text: "Create a new rota", Type: slack.PlainTextType},
+					Style:    slack.StyleDefault,
 				},
-				nil,
-				slack.NewAccessory(
-					slack.NewOptionsSelectBlockElement(
-						slack.OptTypeStatic,
-						nil,
-						SelectRotaAction,
-						optionBlockObjects...,
-					),
-				),
 			),
 		},
 	}
@@ -199,83 +221,39 @@ func (c *RotaCommand) PromptRotaDetails(interaction *slack.InteractionCallback, 
 	return nil
 }
 
+func (c *RotaCommand) CreateRotaPrompt(interaction *slack.InteractionCallback) error {
+	channelId := interaction.Channel.ID
+	triggerId := interaction.TriggerID
+
+	return c.upsertRotaPrompt(channelId, triggerId, "", CreateRotaCallback)
+}
+
 func (c *RotaCommand) UpdateRotaPrompt(interaction *slack.InteractionCallback, action *slack.BlockAction) error {
 	channelId := interaction.Channel.ID
 	triggerId := interaction.TriggerID
 	rotaName := action.Value
 
-	rotaDetails, err := c.getRotaDetails(channelId, rotaName)
-	if err != nil {
-		return err
-	}
+	return c.upsertRotaPrompt(channelId, triggerId, rotaName, UpdateRotaCallback)
+}
 
-	titleText := slack.NewTextBlockObject(slack.PlainTextType, "Update your rota", false, false)
-	closeText := slack.NewTextBlockObject(slack.PlainTextType, "Close", false, false)
-	submitText := slack.NewTextBlockObject(slack.PlainTextType, "Save", false, false)
+func (c *RotaCommand) CreateRota(interaction *slack.InteractionCallback) error {
+	view := interaction.View
+	channelId := view.ExternalID
+	inputs := view.State.Values
+	rotaName := inputs[rotaNameBlock][rotaNameAction].Value
+	rotaMembers := inputs[rotaMembersBlock][rotaMembersAction].SelectedUsers
 
-	//rotaNameText := slack.NewTextBlockObject(slack.PlainTextType, "Rota Name", false, false)
-	//rotaNamePlaceholder := slack.NewTextBlockObject(slack.PlainTextType, "New rota name", false, false)
-	//rotaNameElement := slack.NewPlainTextInputBlockElement(rotaNamePlaceholder, rotaNameAction)
-	//rotaNameElement.MaxLength = 50
-	//rotaNameElement.MinLength = 5
-	//rotaNameElement.InitialValue = rotaDetails.rotaName()
-	//rotaNameBlock := slack.NewInputBlock(rotaNameBlock, rotaNameText, rotaNameElement)
-
-	rotaMemberSelectionText := slack.NewTextBlockObject(slack.PlainTextType, "Select members of your rota", false, false)
-	rotaMemberSelectionElement := &slack.MultiSelectBlockElement{
-		Type:         slack.MultiOptTypeUser,
-		ActionID:     rotaMembersAction,
-		Placeholder:  nil,
-		InitialUsers: rotaDetails.Members,
-	}
-	rotaMemberSelectionBlock := slack.NewInputBlock(rotaMembersBlock, rotaMemberSelectionText, rotaMemberSelectionElement)
-
-	blocks := slack.Blocks{
-		BlockSet: []slack.Block{
-			//rotaNameBlock,
-			rotaMemberSelectionBlock,
-		},
-	}
-
-	var modalRequest slack.ModalViewRequest
-	modalRequest.Type = "modal"
-	modalRequest.Title = titleText
-	modalRequest.Close = closeText
-	modalRequest.Submit = submitText
-	modalRequest.Blocks = blocks
-	modalRequest.CallbackID = UpdateRotaCallback
-	modalRequest.PrivateMetadata = rotaName
-	modalRequest.ExternalID = channelId
-
-	_, err = c.client.OpenView(triggerId, modalRequest)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return c.upsertRotaCallback(channelId, interaction.User.ID, rotaName, rotaMembers)
 }
 
 func (c *RotaCommand) UpdateRota(interaction *slack.InteractionCallback) error {
 	view := interaction.View
 	channelId := view.ExternalID
-	rotaName := view.PrivateMetadata //inputs[rotaNameBlock][rotaNameAction].Value
+	rotaName := view.PrivateMetadata
 	inputs := view.State.Values
 	rotaMembers := inputs[rotaMembersBlock][rotaMembersAction].SelectedUsers
 
-	err := c.saveRotaDetails(channelId, rotaName, rotaMembers)
-	if err != nil {
-		return err
-	}
-
-	prompt := c.rotaDetailsPrompt(rotaMembers, "", rotaName)
-	prompt.Color = "#4af030"
-
-	err = c.respondToClient(channelId, interaction.User.ID, prompt)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return c.upsertRotaCallback(channelId, interaction.User.ID, rotaName, rotaMembers)
 }
 
 func (c *RotaCommand) rotaDetailsPrompt(rotaMembers []string, currOnCallMember string, rotaName string) *slack.Attachment {
@@ -293,7 +271,15 @@ func (c *RotaCommand) rotaDetailsPrompt(rotaMembers []string, currOnCallMember s
 		currRotaMembersText = "The rota is empty. Shall we pull in some members?"
 	}
 
-	var blocks []slack.Block
+	blocks := []slack.Block{
+		slack.NewHeaderBlock(
+			&slack.TextBlockObject{
+				Type: slack.PlainTextType,
+				Text: rotaName,
+			},
+		),
+	}
+
 	if currOnCallMemberText != "" {
 		blocks = append(blocks,
 			slack.NewSectionBlock(
@@ -361,6 +347,92 @@ func (c *RotaCommand) rotaDetailsPrompt(rotaMembers []string, currOnCallMember s
 	attachment.Blocks = slack.Blocks{BlockSet: blocks}
 
 	return &attachment
+}
+
+func (c *RotaCommand) upsertRotaCallback(channelId string, userId string, rotaName string, rotaMembers []string) error {
+	err := c.saveRotaDetails(channelId, rotaName, rotaMembers)
+	if err != nil {
+		return err
+	}
+
+	prompt := c.rotaDetailsPrompt(rotaMembers, "", rotaName)
+	prompt.Color = "#4af030"
+
+	err = c.respondToClient(channelId, userId, prompt)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (c *RotaCommand) upsertRotaPrompt(channelId string, triggerId string, rotaName string, callbackId string) error {
+	var titleTextContent string
+	if callbackId == CreateRotaCallback {
+		titleTextContent = "Create your rota"
+	} else if callbackId == UpdateRotaCallback {
+		titleTextContent = "Update your rota"
+	}
+
+	titleText := slack.NewTextBlockObject(slack.PlainTextType, titleTextContent, false, false)
+	closeText := slack.NewTextBlockObject(slack.PlainTextType, "Close", false, false)
+	submitText := slack.NewTextBlockObject(slack.PlainTextType, "Save", false, false)
+
+	var blockSet []slack.Block
+	if callbackId == CreateRotaCallback {
+		rotaNameText := slack.NewTextBlockObject(slack.PlainTextType, "Rota Name", false, false)
+		rotaNamePlaceholder := slack.NewTextBlockObject(slack.PlainTextType, "New rota name", false, false)
+		rotaNameElement := slack.NewPlainTextInputBlockElement(rotaNamePlaceholder, rotaNameAction)
+		rotaNameElement.MaxLength = 50
+		rotaNameElement.MinLength = 5
+		rotaNameBlock := slack.NewInputBlock(rotaNameBlock, rotaNameText, rotaNameElement)
+
+		blockSet = append(blockSet, rotaNameBlock)
+	}
+
+	var initialRotaMembers []string
+	if callbackId == UpdateRotaCallback {
+		rotaDetails, err := c.getRotaDetails(channelId, rotaName)
+		if err != nil {
+			return err
+		}
+
+		initialRotaMembers = rotaDetails.Members
+	}
+
+	rotaMemberSelectionText := slack.NewTextBlockObject(slack.PlainTextType, "Select members of your rota", false, false)
+	rotaMemberSelectionElement := &slack.MultiSelectBlockElement{
+		Type:         slack.MultiOptTypeUser,
+		ActionID:     rotaMembersAction,
+		Placeholder:  nil,
+		InitialUsers: initialRotaMembers,
+	}
+	rotaMemberSelectionBlock := slack.NewInputBlock(rotaMembersBlock, rotaMemberSelectionText, rotaMemberSelectionElement)
+
+	blockSet = append(blockSet, rotaMemberSelectionBlock)
+	blocks := slack.Blocks{
+		BlockSet: blockSet,
+	}
+
+	var modalRequest slack.ModalViewRequest
+	modalRequest.Type = "modal"
+	modalRequest.Title = titleText
+	modalRequest.Close = closeText
+	modalRequest.Submit = submitText
+	modalRequest.Blocks = blocks
+	modalRequest.CallbackID = callbackId
+	modalRequest.ExternalID = channelId
+
+	if callbackId == UpdateRotaCallback {
+		modalRequest.PrivateMetadata = rotaName
+	}
+
+	_, err := c.client.OpenView(triggerId, modalRequest)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (c *RotaCommand) respondToClient(channelId string, userId string, payload *slack.Attachment) error {

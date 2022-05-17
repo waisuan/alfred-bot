@@ -131,7 +131,7 @@ func (b *Bot) handleInteractionEvent(interaction slack.InteractionCallback) erro
 			case SelectRotaAction:
 				return b.rotaCommand.PromptRotaDetails(&interaction, action)
 			case StartRotaAction:
-				return b.rotaCommand.StartRota(&interaction, action)
+				return b.rotaCommand.StartRotaPrompt(&interaction, action)
 			case StopRotaAction:
 				return b.rotaCommand.StopRota()
 			case CreateRotaPromptAction:
@@ -146,6 +146,8 @@ func (b *Bot) handleInteractionEvent(interaction slack.InteractionCallback) erro
 			return b.rotaCommand.UpdateRota(&interaction)
 		case CreateRotaCallback:
 			return b.rotaCommand.CreateRota(&interaction)
+		case StartRotaCallback:
+			return b.rotaCommand.StartRota(&interaction)
 		}
 	}
 

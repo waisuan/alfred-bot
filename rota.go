@@ -2,13 +2,16 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/slack-go/slack"
+	"strconv"
 	"strings"
+	"time"
 )
 
 type RotaDetails struct {
@@ -16,9 +19,16 @@ type RotaDetails struct {
 	Sk               string // RotaName
 	Members          []string
 	CurrOnCallMember string
-	Duration         string
+	Duration         int
 	StartOfShift     string
 	EndOfShift       string
+}
+
+type RotaCommandMetadata struct {
+	ChannelId    string
+	RotaName     string
+	StartOfShift string
+	EndOfShift   string
 }
 
 type RotaCommand struct {
@@ -34,32 +44,54 @@ func NewRotaCommand(db *dynamodb.Client, client *slack.Client) *RotaCommand {
 }
 
 const TableName = "rotas"
-const rotaActions = "rota_actions"
-const StartRotaAction = "start_rota"
+const StartRotaAction = "start_rota_prompt"
 const StopRotaAction = "stop_rota"
+const SelectRotaAction = "select_rota"
 const UpdateRotaPromptAction = "update_rota_prompt"
+const CreateRotaPromptAction = "create_rota_prompt"
+const rotaActions = "rota_actions"
+const promptActions = "prompt_actions"
 const rotaNameAction = "set_rota_name"
 const rotaMembersAction = "select_rota_members"
+const rotaDurationAction = "set_rota_duration"
+const rotaOnCallMemberAction = "set_on_call_member"
 const rotaNameBlock = "rota_name"
 const rotaMembersBlock = "rota_members"
 const UpdateRotaCallback = "update_rota"
-const SelectRotaAction = "select_rota"
-const promptActions = "prompt_actions"
-const CreateRotaPromptAction = "create_rota_prompt"
 const CreateRotaCallback = "create_rota"
+const StartRotaCallback = "start_rota"
+const rotaDurationBlock = "rota_duration"
+const rotaOnCallMemberBlock = "on_call_member"
 
-func (c *RotaCommand) StartRota(interaction *slack.InteractionCallback, action *slack.BlockAction) error {
+func (c *RotaCommand) StartRotaPrompt(interaction *slack.InteractionCallback, action *slack.BlockAction) error {
 	channelId := interaction.Channel.ID
+	rotaName := action.Value
 
-	rotaDetails, err := c.getRotaDetails(channelId, action.Value)
+	rotaDetails, err := c.getRotaDetails(channelId, rotaName)
 	if err != nil {
 		return err
 	}
 
-	userId := interaction.User.ID
-	if len(rotaDetails.Members) == 0 {
+	var unableToStartRotaErr string
+
+	rotaMembers := rotaDetails.Members
+	if len(rotaMembers) == 0 {
+		unableToStartRotaErr = "Sorry, I can't start an empty rota!"
+	}
+
+	if rotaDetails.Duration == 0 {
+		unableToStartRotaErr = "Sorry, I can't start a rota without an on-call shift duration!"
+	}
+
+	if rotaDetails.CurrOnCallMember != "" {
+		unableToStartRotaErr = fmt.Sprintf("The rota has already begun. The current on-call person is: %s", atUserId(rotaDetails.CurrOnCallMember))
+	}
+
+	if unableToStartRotaErr != "" {
+		userId := interaction.User.ID
+
 		attachment := slack.Attachment{}
-		attachment.Text = "Sorry, I can't start an empty rota!"
+		attachment.Text = unableToStartRotaErr
 		attachment.Color = "#f0303a"
 
 		err = c.respondToClient(channelId, userId, &attachment)
@@ -70,19 +102,63 @@ func (c *RotaCommand) StartRota(interaction *slack.InteractionCallback, action *
 		return nil
 	}
 
-	currOnCallMember := rotaDetails.CurrOnCallMember
-	if currOnCallMember != "" {
-		attachment := slack.Attachment{}
-		attachment.Text = fmt.Sprintf("The rota has already begun. The current on-call person is: %s", atUserId(currOnCallMember))
-		attachment.Color = "#f0303a"
+	titleText := slack.NewTextBlockObject(slack.PlainTextType, "Start your rota", false, false)
+	closeText := slack.NewTextBlockObject(slack.PlainTextType, "Close", false, false)
+	submitText := slack.NewTextBlockObject(slack.PlainTextType, "Save", false, false)
 
-		err = c.respondToClient(channelId, userId, &attachment)
-		if err != nil {
-			return err
-		}
-
-		return nil
+	onCallMemberText := slack.NewTextBlockObject(slack.PlainTextType, "Who should be on-call for this shift?", false, false)
+	onCallOptionBlockObjects := make([]*slack.OptionBlockObject, 0, len(rotaMembers))
+	for _, v := range rotaMembers {
+		optionText := slack.NewTextBlockObject(slack.PlainTextType, atUserId(v), false, false)
+		onCallOptionBlockObjects = append(onCallOptionBlockObjects, slack.NewOptionBlockObject(v, optionText, nil))
 	}
+	onCallMemberElement := slack.NewOptionsSelectBlockElement(slack.OptTypeStatic, nil, rotaOnCallMemberAction, onCallOptionBlockObjects...)
+	onCallMemberInputBlock := slack.NewInputBlock(rotaOnCallMemberBlock, onCallMemberText, onCallMemberElement)
+
+	startOfShiftTime := time.Now()
+	endOfShiftTime := rotaDetails.generateEndOfShift(startOfShiftTime)
+	shiftDetailsBlock := slack.NewSectionBlock(
+		&slack.TextBlockObject{
+			Type: slack.MarkdownType,
+			Text: fmt.Sprintf("*Their on-call shift will end on: %v*", endOfShiftTime),
+		},
+		nil,
+		nil,
+	)
+
+	blocks := slack.Blocks{
+		BlockSet: []slack.Block{
+			onCallMemberInputBlock,
+			shiftDetailsBlock,
+		},
+	}
+
+	var modalRequest slack.ModalViewRequest
+	modalRequest.Type = "modal"
+	modalRequest.Title = titleText
+	modalRequest.Close = closeText
+	modalRequest.Submit = submitText
+	modalRequest.Blocks = blocks
+	modalRequest.CallbackID = StartRotaCallback
+
+	metadata := RotaCommandMetadata{
+		ChannelId:    channelId,
+		RotaName:     rotaName,
+		StartOfShift: formatTime(startOfShiftTime),
+		EndOfShift:   endOfShiftTime,
+	}
+	b, err := json.Marshal(metadata)
+	if err != nil {
+		return err
+	}
+	modalRequest.PrivateMetadata = string(b)
+
+	_, err = c.client.OpenView(interaction.TriggerID, modalRequest)
+	if err != nil {
+		return err
+	}
+
+	return nil
 
 	//newOnCallMember := action.Value
 	//if newOnCallMember != "" {
@@ -123,8 +199,6 @@ func (c *RotaCommand) StartRota(interaction *slack.InteractionCallback, action *
 	//		}
 	//	}
 	//}()
-
-	return nil
 }
 
 func (c *RotaCommand) StopRota() error {
@@ -158,10 +232,10 @@ func (c *RotaCommand) Prompt(command slack.SlashCommand) (interface{}, error) {
 			nil,
 		)
 	} else {
-		optionBlockObjects := make([]*slack.OptionBlockObject, 0, len(rotaNames))
+		rotaNameOptionBlockObjects := make([]*slack.OptionBlockObject, 0, len(rotaNames))
 		for _, v := range rotaNames {
 			optionText := slack.NewTextBlockObject(slack.PlainTextType, v, false, false)
-			optionBlockObjects = append(optionBlockObjects, slack.NewOptionBlockObject(v, optionText, nil))
+			rotaNameOptionBlockObjects = append(rotaNameOptionBlockObjects, slack.NewOptionBlockObject(v, optionText, nil))
 		}
 
 		mainPromptBlock = slack.NewSectionBlock(
@@ -175,7 +249,7 @@ func (c *RotaCommand) Prompt(command slack.SlashCommand) (interface{}, error) {
 					slack.OptTypeStatic,
 					nil,
 					SelectRotaAction,
-					optionBlockObjects...,
+					rotaNameOptionBlockObjects...,
 				),
 			),
 		)
@@ -211,8 +285,10 @@ func (c *RotaCommand) PromptRotaDetails(interaction *slack.InteractionCallback, 
 
 	rotaMembers := rotaDetails.Members
 	currOnCallMember := rotaDetails.CurrOnCallMember
+	rotaDuration := rotaDetails.Duration
+	endOfShift := rotaDetails.EndOfShift
 
-	prompt := c.rotaDetailsPrompt(rotaMembers, currOnCallMember, rotaName)
+	prompt := c.rotaDetailsPrompt(rotaMembers, currOnCallMember, rotaName, rotaDuration, endOfShift)
 	err = c.respondToClient(channelId, interaction.User.ID, prompt)
 	if err != nil {
 		return err
@@ -242,8 +318,9 @@ func (c *RotaCommand) CreateRota(interaction *slack.InteractionCallback) error {
 	inputs := view.State.Values
 	rotaName := inputs[rotaNameBlock][rotaNameAction].Value
 	rotaMembers := inputs[rotaMembersBlock][rotaMembersAction].SelectedUsers
+	rotaDuration := inputs[rotaDurationBlock][rotaDurationAction].SelectedOption.Value
 
-	return c.upsertRotaCallback(channelId, interaction.User.ID, rotaName, rotaMembers)
+	return c.upsertRotaCallback(channelId, interaction.User.ID, rotaName, rotaMembers, rotaDuration)
 }
 
 func (c *RotaCommand) UpdateRota(interaction *slack.InteractionCallback) error {
@@ -252,18 +329,46 @@ func (c *RotaCommand) UpdateRota(interaction *slack.InteractionCallback) error {
 	rotaName := view.PrivateMetadata
 	inputs := view.State.Values
 	rotaMembers := inputs[rotaMembersBlock][rotaMembersAction].SelectedUsers
+	rotaDuration := inputs[rotaDurationBlock][rotaDurationAction].SelectedOption.Value
 
-	return c.upsertRotaCallback(channelId, interaction.User.ID, rotaName, rotaMembers)
+	return c.upsertRotaCallback(channelId, interaction.User.ID, rotaName, rotaMembers, rotaDuration)
 }
 
-func (c *RotaCommand) rotaDetailsPrompt(rotaMembers []string, currOnCallMember string, rotaName string) *slack.Attachment {
+func (c *RotaCommand) StartRota(interaction *slack.InteractionCallback) error {
+	view := interaction.View
+	inputs := view.State.Values
+	onCallMember := inputs[rotaOnCallMemberBlock][rotaOnCallMemberAction].SelectedOption.Value
+
+	var metadata RotaCommandMetadata
+	err := json.Unmarshal([]byte(view.PrivateMetadata), &metadata)
+	if err != nil {
+		return err
+	}
+
+	err = c.updateOnCallMember(metadata.ChannelId, metadata.RotaName, onCallMember, metadata.StartOfShift, metadata.EndOfShift)
+	if err != nil {
+		return err
+	}
+
+	attachment := slack.Attachment{}
+	attachment.Text = fmt.Sprintf("The new on-call person is: %s", atUserId(onCallMember))
+	attachment.Color = "#4af030"
+	_, _, err = c.client.PostMessage(metadata.ChannelId, slack.MsgOptionAttachments(attachment))
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (c *RotaCommand) rotaDetailsPrompt(rotaMembers []string, currOnCallMember string, rotaName string, rotaDuration int, endOfShift string) *slack.Attachment {
 	var currRotaMembersText string
 	var currOnCallMemberText string
 	if len(rotaMembers) > 0 {
 		currRotaMembersText = fmt.Sprintf("Current rota members:\n%s", rotaMembersAsString(rotaMembers))
 
 		if currOnCallMember != "" {
-			currOnCallMemberText = fmt.Sprintf("*The current on-call person is: %s*", atUserId(currOnCallMember))
+			currOnCallMemberText = fmt.Sprintf("*The current on-call person is: %s (shift ends at %v)*", atUserId(currOnCallMember), endOfShift)
 		} else {
 			currOnCallMemberText = "*The rota has not started yet.*"
 		}
@@ -277,6 +382,14 @@ func (c *RotaCommand) rotaDetailsPrompt(rotaMembers []string, currOnCallMember s
 				Type: slack.PlainTextType,
 				Text: rotaName,
 			},
+		),
+		slack.NewSectionBlock(
+			&slack.TextBlockObject{
+				Type: slack.MarkdownType,
+				Text: fmt.Sprintf("Duration of an on-call shift: %d week(s)", rotaDuration),
+			},
+			nil,
+			nil,
 		),
 	}
 
@@ -304,21 +417,19 @@ func (c *RotaCommand) rotaDetailsPrompt(rotaMembers []string, currOnCallMember s
 		),
 	)
 
-	rotaActionsBlock := slack.NewActionBlock(
-		rotaActions,
-		&slack.ButtonBlockElement{
-			Type:     "button",
-			ActionID: UpdateRotaPromptAction,
-			Text:     &slack.TextBlockObject{Text: "Update the rota", Type: slack.PlainTextType},
-			Style:    slack.StyleDefault,
-			Value:    rotaName,
-		},
-	)
+	rotaActionsBlock := slack.NewActionBlock(rotaActions)
 
 	if len(rotaMembers) > 0 {
 		if currOnCallMember == "" {
 			rotaActionsBlock.Elements.ElementSet = append(
 				rotaActionsBlock.Elements.ElementSet,
+				&slack.ButtonBlockElement{
+					Type:     "button",
+					ActionID: UpdateRotaPromptAction,
+					Text:     &slack.TextBlockObject{Text: "Update the rota", Type: slack.PlainTextType},
+					Style:    slack.StyleDefault,
+					Value:    rotaName,
+				},
 				&slack.ButtonBlockElement{
 					Type:     "button",
 					ActionID: StartRotaAction,
@@ -349,13 +460,15 @@ func (c *RotaCommand) rotaDetailsPrompt(rotaMembers []string, currOnCallMember s
 	return &attachment
 }
 
-func (c *RotaCommand) upsertRotaCallback(channelId string, userId string, rotaName string, rotaMembers []string) error {
-	err := c.saveRotaDetails(channelId, rotaName, rotaMembers)
+func (c *RotaCommand) upsertRotaCallback(channelId string, userId string, rotaName string, rotaMembers []string, rotaDuration string) error {
+	err := c.saveRotaDetails(channelId, rotaName, rotaMembers, rotaDuration)
 	if err != nil {
 		return err
 	}
 
-	prompt := c.rotaDetailsPrompt(rotaMembers, "", rotaName)
+	rotaDurationAsInt, _ := strconv.Atoi(rotaDuration)
+
+	prompt := c.rotaDetailsPrompt(rotaMembers, "", rotaName, rotaDurationAsInt, "")
 	prompt.Color = "#4af030"
 
 	err = c.respondToClient(channelId, userId, prompt)
@@ -385,9 +498,9 @@ func (c *RotaCommand) upsertRotaPrompt(channelId string, triggerId string, rotaN
 		rotaNameElement := slack.NewPlainTextInputBlockElement(rotaNamePlaceholder, rotaNameAction)
 		rotaNameElement.MaxLength = 50
 		rotaNameElement.MinLength = 5
-		rotaNameBlock := slack.NewInputBlock(rotaNameBlock, rotaNameText, rotaNameElement)
+		rotaNameInputBlock := slack.NewInputBlock(rotaNameBlock, rotaNameText, rotaNameElement)
 
-		blockSet = append(blockSet, rotaNameBlock)
+		blockSet = append(blockSet, rotaNameInputBlock)
 	}
 
 	var initialRotaMembers []string
@@ -407,9 +520,22 @@ func (c *RotaCommand) upsertRotaPrompt(channelId string, triggerId string, rotaN
 		Placeholder:  nil,
 		InitialUsers: initialRotaMembers,
 	}
-	rotaMemberSelectionBlock := slack.NewInputBlock(rotaMembersBlock, rotaMemberSelectionText, rotaMemberSelectionElement)
+	rotaMemberSelectionInputBlock := slack.NewInputBlock(rotaMembersBlock, rotaMemberSelectionText, rotaMemberSelectionElement)
 
-	blockSet = append(blockSet, rotaMemberSelectionBlock)
+	rotaDurationText := slack.NewTextBlockObject(slack.PlainTextType, "How long is one on-call shift?", false, false)
+	rotaDurationOptionBlockObjects := []*slack.OptionBlockObject{
+		slack.NewOptionBlockObject("1", slack.NewTextBlockObject(slack.PlainTextType, "1 week", false, false), nil),
+		slack.NewOptionBlockObject("2", slack.NewTextBlockObject(slack.PlainTextType, "2 weeks", false, false), nil),
+	}
+	rotaDurationElement := slack.NewRadioButtonsBlockElement(rotaDurationAction, rotaDurationOptionBlockObjects...)
+	// TODO: rotaDurationElement.InitialOption
+	rotaDurationInputBlock := slack.NewInputBlock(rotaDurationBlock, rotaDurationText, rotaDurationElement)
+
+	blockSet = append(
+		blockSet,
+		rotaMemberSelectionInputBlock,
+		rotaDurationInputBlock,
+	)
 	blocks := slack.Blocks{
 		BlockSet: blockSet,
 	}
@@ -493,7 +619,7 @@ func (c *RotaCommand) getRotaDetails(channelId string, rotaName string) (*RotaDe
 	return &rotaDetails, nil
 }
 
-func (c *RotaCommand) saveRotaDetails(channelId string, rotaName string, rotaMembers []string) error {
+func (c *RotaCommand) saveRotaDetails(channelId string, rotaName string, rotaMembers []string, rotaDuration string) error {
 	var rotaMembersAsAttr []types.AttributeValue
 	for _, v := range rotaMembers {
 		rotaMembersAsAttr = append(rotaMembersAsAttr, &types.AttributeValueMemberS{Value: v})
@@ -502,9 +628,10 @@ func (c *RotaCommand) saveRotaDetails(channelId string, rotaName string, rotaMem
 	_, err := c.db.PutItem(context.TODO(), &dynamodb.PutItemInput{
 		TableName: aws.String(TableName),
 		Item: map[string]types.AttributeValue{
-			"pk":      &types.AttributeValueMemberS{Value: channelId},
-			"sk":      &types.AttributeValueMemberS{Value: rotaName},
-			"members": &types.AttributeValueMemberL{Value: rotaMembersAsAttr},
+			"pk":       &types.AttributeValueMemberS{Value: channelId},
+			"sk":       &types.AttributeValueMemberS{Value: rotaName},
+			"members":  &types.AttributeValueMemberL{Value: rotaMembersAsAttr},
+			"duration": &types.AttributeValueMemberN{Value: rotaDuration},
 		},
 	})
 	if err != nil {
@@ -513,16 +640,19 @@ func (c *RotaCommand) saveRotaDetails(channelId string, rotaName string, rotaMem
 
 	return nil
 }
-func (c *RotaCommand) updateOnCallMember(channelId string, rotaName string, newOnCallMember string) error {
+
+func (c *RotaCommand) updateOnCallMember(channelId string, rotaName string, newOnCallMember string, startOfShift string, endOfShift string) error {
 	_, err := c.db.UpdateItem(context.TODO(), &dynamodb.UpdateItemInput{
 		TableName: aws.String(TableName),
 		Key: map[string]types.AttributeValue{
 			"pk": &types.AttributeValueMemberS{Value: channelId},
 			"sk": &types.AttributeValueMemberS{Value: rotaName},
 		},
-		UpdateExpression: aws.String("set currOnCallMember = :currOnCallMember"),
+		UpdateExpression: aws.String("set currOnCallMember = :currOnCallMember, startOfShift = :startOfShift, endOfShift = :endOfShift"),
 		ExpressionAttributeValues: map[string]types.AttributeValue{
 			":currOnCallMember": &types.AttributeValueMemberS{Value: newOnCallMember},
+			":startOfShift":     &types.AttributeValueMemberS{Value: startOfShift},
+			":endOfShift":       &types.AttributeValueMemberS{Value: endOfShift},
 		},
 	})
 
@@ -537,6 +667,10 @@ func (rd *RotaDetails) rotaName() string {
 	return rd.Sk
 }
 
+func (rd *RotaDetails) generateEndOfShift(startOfShift time.Time) string {
+	return formatTime(startOfShift.Add(time.Hour * 168 * time.Duration(rd.Duration)))
+}
+
 func rotaMembersAsString(members []string) string {
 	var formattedUserIds []string
 	for _, userId := range members {
@@ -547,4 +681,8 @@ func rotaMembersAsString(members []string) string {
 
 func atUserId(userId string) string {
 	return fmt.Sprintf("<@%s>", userId)
+}
+
+func formatTime(rawTime time.Time) string {
+	return rawTime.Format(time.RFC1123)
 }

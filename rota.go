@@ -9,6 +9,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/slack-go/slack"
+	"log"
 	"strconv"
 	"strings"
 	"time"
@@ -62,6 +63,42 @@ const CreateRotaCallback = "create_rota"
 const StartRotaCallback = "start_rota"
 const rotaDurationBlock = "rota_duration"
 const rotaOnCallMemberBlock = "on_call_member"
+
+func (c *RotaCommand) HandleEndOfOnCallShifts() {
+	go func() {
+		for {
+			rotas, err := c.getEndingOnCallShifts()
+			if err != nil {
+				log.Println(err)
+			}
+
+			for _, v := range rotas {
+				var nextOnCallMember string
+				for i, m := range v.Members {
+					if m == v.CurrOnCallMember {
+						nextOnCallMember = v.Members[(i+1)%len(v.Members)]
+					}
+				}
+				startOfShift := time.Now()
+				endOfShift := v.generateEndOfShift(startOfShift)
+				err := c.updateOnCallMember(v.Pk, v.Sk, nextOnCallMember, formatTime(startOfShift), endOfShift)
+				if err != nil {
+					log.Println(fmt.Sprintf("Could not update on-call shift for %v (%v): %v", v.Sk, v.Pk, err))
+				} else {
+					attachment := slack.Attachment{}
+					attachment.Text = fmt.Sprintf("[%v] The new on-call person is: %s", v.Sk, atUserId(nextOnCallMember))
+					attachment.Color = "#4af030"
+					_, _, err = c.client.PostMessage(v.Pk, slack.MsgOptionAttachments(attachment))
+					if err != nil {
+						log.Println(err)
+					}
+				}
+			}
+
+			time.Sleep(time.Minute)
+		}
+	}()
+}
 
 func (c *RotaCommand) StartRotaPrompt(interaction *slack.InteractionCallback, action *slack.BlockAction) error {
 	channelId := interaction.Channel.ID
@@ -351,7 +388,7 @@ func (c *RotaCommand) StartRota(interaction *slack.InteractionCallback) error {
 	}
 
 	attachment := slack.Attachment{}
-	attachment.Text = fmt.Sprintf("The new on-call person is: %s", atUserId(onCallMember))
+	attachment.Text = fmt.Sprintf("[%v] The new on-call person is: %s", metadata.RotaName, atUserId(onCallMember))
 	attachment.Color = "#4af030"
 	_, _, err = c.client.PostMessage(metadata.ChannelId, slack.MsgOptionAttachments(attachment))
 	if err != nil {
@@ -619,6 +656,32 @@ func (c *RotaCommand) getRotaDetails(channelId string, rotaName string) (*RotaDe
 	return &rotaDetails, nil
 }
 
+func (c *RotaCommand) getEndingOnCallShifts() ([]*RotaDetails, error) {
+	out, err := c.db.Scan(context.TODO(), &dynamodb.ScanInput{
+		TableName:        aws.String(TableName),
+		FilterExpression: aws.String("endOfShift <= :now"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":now": &types.AttributeValueMemberS{Value: formatTime(time.Now())},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var rotas []*RotaDetails
+	for _, v := range out.Items {
+		var rotaDetails RotaDetails
+		err = attributevalue.UnmarshalMap(v, &rotaDetails)
+		if err != nil {
+			return nil, err
+		}
+
+		rotas = append(rotas, &rotaDetails)
+	}
+
+	return rotas, nil
+}
+
 func (c *RotaCommand) saveRotaDetails(channelId string, rotaName string, rotaMembers []string, rotaDuration string) error {
 	var rotaMembersAsAttr []types.AttributeValue
 	for _, v := range rotaMembers {
@@ -668,7 +731,9 @@ func (rd *RotaDetails) rotaName() string {
 }
 
 func (rd *RotaDetails) generateEndOfShift(startOfShift time.Time) string {
-	return formatTime(startOfShift.Add(time.Hour * 168 * time.Duration(rd.Duration)))
+	// TODO: Hard-coded quick shift duration for testing purposes
+	return formatTime(startOfShift.Add(time.Minute))
+	// return formatTime(startOfShift.Add(time.Hour * 168 * time.Duration(rd.Duration)))
 }
 
 func rotaMembersAsString(members []string) string {

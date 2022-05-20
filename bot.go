@@ -39,6 +39,7 @@ func (b *Bot) Start() {
 	defer cancel()
 
 	b.listenToEvents(ctx)
+	b.startBackgroundTasks()
 
 	_ = b.socketClient.Run()
 }
@@ -96,6 +97,10 @@ func (b *Bot) listenToEvents(ctx context.Context) {
 			}
 		}
 	}()
+}
+
+func (b *Bot) startBackgroundTasks() {
+	b.rotaCommand.HandleEndOfOnCallShifts()
 }
 
 func (b *Bot) handleEventMessage(event slackevents.EventsAPIEvent) error {

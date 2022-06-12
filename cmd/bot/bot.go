@@ -1,6 +1,8 @@
-package main
+package bot
 
 import (
+	"alfred-bot/cmd/bot/commands/rotacommand"
+	"alfred-bot/utils/db"
 	"context"
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
@@ -11,12 +13,12 @@ import (
 
 type Bot struct {
 	socketClient *socketmode.Client
-	rotaCommand  *RotaCommand
+	rotaCommand  *rotacommand.RotaCommand
 }
 
-func NewBot(token string, appToken string) *Bot {
+func New(token string, appToken string) *Bot {
 	client := slack.New(token, slack.OptionDebug(true), slack.OptionAppLevelToken(appToken))
-	db := InitDatabase()
+	dbClient := db.Init()
 	socketClient := socketmode.New(
 		client,
 		socketmode.OptionDebug(true),
@@ -25,7 +27,7 @@ func NewBot(token string, appToken string) *Bot {
 
 	return &Bot{
 		socketClient: socketClient,
-		rotaCommand:  NewRotaCommand(db, client),
+		rotaCommand:  rotacommand.New(dbClient, client),
 	}
 }
 
@@ -128,25 +130,25 @@ func (b *Bot) handleInteractionEvent(interaction slack.InteractionCallback) erro
 	case slack.InteractionTypeBlockActions:
 		for _, action := range interaction.ActionCallback.BlockActions {
 			switch action.ActionID {
-			case SelectRotaAction:
+			case rotacommand.SelectRotaAction:
 				return b.rotaCommand.PromptRotaDetails(&interaction, action)
-			case StartRotaAction:
+			case rotacommand.StartRotaAction:
 				return b.rotaCommand.StartRotaPrompt(&interaction, action)
-			case StopRotaAction:
+			case rotacommand.StopRotaAction:
 				return b.rotaCommand.StopRota(&interaction, action)
-			case CreateRotaPromptAction:
+			case rotacommand.CreateRotaPromptAction:
 				return b.rotaCommand.CreateRotaPrompt(&interaction)
-			case UpdateRotaPromptAction:
+			case rotacommand.UpdateRotaPromptAction:
 				return b.rotaCommand.UpdateRotaPrompt(&interaction, action)
 			}
 		}
 	case slack.InteractionTypeViewSubmission:
 		switch interaction.View.CallbackID {
-		case UpdateRotaCallback:
+		case rotacommand.UpdateRotaCallback:
 			return b.rotaCommand.UpdateRota(&interaction)
-		case CreateRotaCallback:
+		case rotacommand.CreateRotaCallback:
 			return b.rotaCommand.CreateRota(&interaction)
-		case StartRotaCallback:
+		case rotacommand.StartRotaCallback:
 			return b.rotaCommand.StartRota(&interaction)
 		}
 	}

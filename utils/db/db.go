@@ -1,4 +1,4 @@
-package main
+package db
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 
 const TableName = "rotas"
 
-func InitDatabase() *dynamodb.Client {
+func Init() *dynamodb.Client {
 	cfg, err := config.LoadDefaultConfig(context.TODO())
 	if err != nil {
 		panic(err)

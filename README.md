@@ -18,12 +18,12 @@ Your friendly neighbourhood bot to aid in your everyday rota needs!
 2. Update a rota's list of members.
 3. Select from rotas associated to a given channel.
 4. View a rota's details.
+5. Stop a running rota.
+6. Alert channel when on-call person changes.
 
 # TODOs
 
 1. Start a rota w/ an option to select the initial on-call person.
-2. Stop a running rota.
-3. Delete a rota.
-4. Override rota's current on-call person by selecting a different person for a given shift.
-5. Alert channel when on-call person changes.
-6. An option to insert/amend the duration of an on-call shift.
+2. Delete a rota.
+3. Override rota's current on-call person by selecting a different person for a given shift.
+4. An option to insert/amend the duration of an on-call shift.

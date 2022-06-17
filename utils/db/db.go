@@ -11,7 +11,7 @@ import (
 
 const TableName = "rotas"
 
-func Init() *dynamodb.Client {
+func Init(tableName string) *dynamodb.Client {
 	cfg, err := config.LoadDefaultConfig(context.TODO())
 	if err != nil {
 		panic(err)
@@ -25,7 +25,7 @@ func Init() *dynamodb.Client {
 		options.EndpointResolver = dynamodb.EndpointResolverFromURL("http://localhost:8000")
 	})
 
-	_, err = svc.DescribeTable(context.TODO(), &dynamodb.DescribeTableInput{TableName: aws.String(TableName)})
+	_, err = svc.DescribeTable(context.TODO(), &dynamodb.DescribeTableInput{TableName: aws.String(tableName)})
 	if err != nil {
 		_, err := svc.CreateTable(context.TODO(), &dynamodb.CreateTableInput{
 			AttributeDefinitions: []types.AttributeDefinition{
@@ -48,7 +48,7 @@ func Init() *dynamodb.Client {
 					KeyType:       types.KeyTypeRange,
 				},
 			},
-			TableName:   aws.String(TableName),
+			TableName:   aws.String(tableName),
 			BillingMode: types.BillingModePayPerRequest,
 		})
 		if err != nil {

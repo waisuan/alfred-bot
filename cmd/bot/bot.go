@@ -2,6 +2,7 @@ package bot
 
 import (
 	"alfred-bot/cmd/bot/commands/rotacommand"
+	rotaHandler "alfred-bot/cmd/bot/commands/rotacommand/handler"
 	"alfred-bot/utils/db"
 	"context"
 	"github.com/slack-go/slack"
@@ -18,7 +19,7 @@ type Bot struct {
 
 func New(token string, appToken string) *Bot {
 	client := slack.New(token, slack.OptionDebug(true), slack.OptionAppLevelToken(appToken))
-	dbClient := db.Init()
+	dbClient := db.Init(db.TableName)
 	socketClient := socketmode.New(
 		client,
 		socketmode.OptionDebug(true),
@@ -27,7 +28,7 @@ func New(token string, appToken string) *Bot {
 
 	return &Bot{
 		socketClient: socketClient,
-		rotaCommand:  rotacommand.New(dbClient, client),
+		rotaCommand:  rotacommand.New(rotaHandler.New(dbClient), client),
 	}
 }
 

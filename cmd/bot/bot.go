@@ -19,7 +19,7 @@ type Bot struct {
 
 func New(token string, appToken string) *Bot {
 	client := slack.New(token, slack.OptionDebug(true), slack.OptionAppLevelToken(appToken))
-	dbClient := db.Init(db.TableName)
+	dbHandler := db.New()
 	socketClient := socketmode.New(
 		client,
 		socketmode.OptionDebug(true),
@@ -28,7 +28,7 @@ func New(token string, appToken string) *Bot {
 
 	return &Bot{
 		socketClient: socketClient,
-		rotaCommand:  rotacommand.New(rotaHandler.New(dbClient), client),
+		rotaCommand:  rotacommand.New(rotaHandler.New(dbHandler), client),
 	}
 }
 

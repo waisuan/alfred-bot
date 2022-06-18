@@ -7,11 +7,17 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"os"
 )
 
-const TableName = "rotas"
+type Database struct {
+	TableName string
+	Client    *dynamodb.Client
+}
 
-func Init(tableName string) *dynamodb.Client {
+func New() *Database {
+	tableName := os.Getenv("DB_TABLE_NAME")
+
 	cfg, err := config.LoadDefaultConfig(context.TODO())
 	if err != nil {
 		panic(err)
@@ -56,5 +62,15 @@ func Init(tableName string) *dynamodb.Client {
 		}
 	}
 
-	return svc
+	return &Database{
+		Client:    svc,
+		TableName: tableName,
+	}
+}
+
+func (d *Database) DeleteTable() {
+	_, err := d.Client.DeleteTable(context.TODO(), &dynamodb.DeleteTableInput{TableName: aws.String(d.TableName)})
+	if err != nil {
+		panic(err)
+	}
 }

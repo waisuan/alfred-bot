@@ -13,10 +13,10 @@ import (
 )
 
 type RotaHandler struct {
-	db *dynamodb.Client
+	db *db.Database
 }
 
-func New(db *dynamodb.Client) *RotaHandler {
+func New(db *db.Database) *RotaHandler {
 	return &RotaHandler{
 		db: db,
 	}
@@ -24,8 +24,8 @@ func New(db *dynamodb.Client) *RotaHandler {
 
 func (h *RotaHandler) GetRotaNames(channelId string) ([]string, error) {
 	// TODO: Handle pagination
-	out, err := h.db.Query(context.TODO(), &dynamodb.QueryInput{
-		TableName:              aws.String(db.TableName),
+	out, err := h.db.Client.Query(context.TODO(), &dynamodb.QueryInput{
+		TableName:              aws.String(h.db.TableName),
 		KeyConditionExpression: aws.String("pk = :pk"),
 		ExpressionAttributeValues: map[string]types.AttributeValue{
 			":pk": &types.AttributeValueMemberS{Value: channelId},
@@ -51,8 +51,8 @@ func (h *RotaHandler) GetRotaNames(channelId string) ([]string, error) {
 }
 
 func (h *RotaHandler) GetRotaDetails(channelId string, rotaName string) (*rotadetails.RotaDetails, error) {
-	out, err := h.db.GetItem(context.TODO(), &dynamodb.GetItemInput{
-		TableName: aws.String(db.TableName),
+	out, err := h.db.Client.GetItem(context.TODO(), &dynamodb.GetItemInput{
+		TableName: aws.String(h.db.TableName),
 		Key: map[string]types.AttributeValue{
 			"pk": &types.AttributeValueMemberS{Value: channelId},
 			"sk": &types.AttributeValueMemberS{Value: rotaName},
@@ -60,6 +60,10 @@ func (h *RotaHandler) GetRotaDetails(channelId string, rotaName string) (*rotade
 	})
 	if err != nil {
 		return nil, err
+	}
+
+	if len(out.Item) == 0 {
+		return nil, nil
 	}
 
 	var rotaDetails rotadetails.RotaDetails
@@ -72,8 +76,8 @@ func (h *RotaHandler) GetRotaDetails(channelId string, rotaName string) (*rotade
 }
 
 func (h *RotaHandler) GetEndingOnCallShifts() ([]*rotadetails.RotaDetails, error) {
-	out, err := h.db.Scan(context.TODO(), &dynamodb.ScanInput{
-		TableName:        aws.String(db.TableName),
+	out, err := h.db.Client.Scan(context.TODO(), &dynamodb.ScanInput{
+		TableName:        aws.String(h.db.TableName),
 		FilterExpression: aws.String("attribute_exists(endOfShift) AND endOfShift <> :empty AND endOfShift <= :now"),
 		ExpressionAttributeValues: map[string]types.AttributeValue{
 			":empty": &types.AttributeValueMemberS{Value: ""},
@@ -104,8 +108,8 @@ func (h *RotaHandler) SaveRotaDetails(channelId string, rotaName string, rotaMem
 		rotaMembersAsAttr = append(rotaMembersAsAttr, &types.AttributeValueMemberS{Value: v})
 	}
 
-	_, err := h.db.PutItem(context.TODO(), &dynamodb.PutItemInput{
-		TableName: aws.String(db.TableName),
+	_, err := h.db.Client.PutItem(context.TODO(), &dynamodb.PutItemInput{
+		TableName: aws.String(h.db.TableName),
 		Item: map[string]types.AttributeValue{
 			"pk":       &types.AttributeValueMemberS{Value: channelId},
 			"sk":       &types.AttributeValueMemberS{Value: rotaName},
@@ -121,8 +125,8 @@ func (h *RotaHandler) SaveRotaDetails(channelId string, rotaName string, rotaMem
 }
 
 func (h *RotaHandler) UpdateOnCallMember(channelId string, rotaName string, newOnCallMember string, startOfShift string, endOfShift string) error {
-	_, err := h.db.UpdateItem(context.TODO(), &dynamodb.UpdateItemInput{
-		TableName: aws.String(db.TableName),
+	_, err := h.db.Client.UpdateItem(context.TODO(), &dynamodb.UpdateItemInput{
+		TableName: aws.String(h.db.TableName),
 		Key: map[string]types.AttributeValue{
 			"pk": &types.AttributeValueMemberS{Value: channelId},
 			"sk": &types.AttributeValueMemberS{Value: rotaName},

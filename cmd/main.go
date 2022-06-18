@@ -2,12 +2,12 @@ package main
 
 import (
 	"alfred-bot/cmd/bot"
-	"github.com/joho/godotenv"
+	"alfred-bot/config"
 	"os"
 )
 
 func main() {
-	_ = godotenv.Load(".env")
+	config.BootstrapEnv(false)
 
 	token := os.Getenv("SLACK_AUTH_TOKEN")
 	appToken := os.Getenv("SLACK_APP_TOKEN")

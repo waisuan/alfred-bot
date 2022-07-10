@@ -3,6 +3,7 @@ package rotacommand
 import (
 	"alfred-bot/cmd/bot/commands/rotacommand/models/rotadetails"
 	"alfred-bot/config"
+	"fmt"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/slack-go/slack"
@@ -30,6 +31,17 @@ func (m *MockSlackClient) PostEphemeral(channelID string, userID string, attachm
 }
 
 func (m *MockSlackClient) OpenView(triggerID string, view slack.ModalViewRequest) (*slack.ViewResponse, error) {
+	element := view.Blocks.BlockSet[0].(*slack.InputBlock)
+	fmt.Println(element.BlockID)
+	fmt.Println(element.Label.Text)
+
+	subElement := element.Element.(*slack.SelectBlockElement)
+	fmt.Println(subElement.Type)
+	fmt.Println(subElement.ActionID)
+	for _, v := range subElement.Options {
+		fmt.Println(fmt.Sprintf("%v, %v", v.Text.Text, v.Value))
+	}
+
 	m.Inbox = append(
 		m.Inbox,
 		string(view.Type),

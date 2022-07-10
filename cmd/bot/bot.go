@@ -4,6 +4,7 @@ import (
 	"alfred-bot/cmd/bot/commands/rotacommand"
 	rotaHandler "alfred-bot/cmd/bot/commands/rotacommand/handler"
 	"alfred-bot/utils/db"
+	"alfred-bot/utils/slackclient"
 	"context"
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
@@ -28,7 +29,7 @@ func New(token string, appToken string) *Bot {
 
 	return &Bot{
 		socketClient: socketClient,
-		rotaCommand:  rotacommand.New(rotaHandler.New(dbHandler), client),
+		rotaCommand:  rotacommand.New(rotaHandler.New(dbHandler), slackclient.New(client)),
 	}
 }
 

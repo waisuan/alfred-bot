@@ -5,6 +5,7 @@ import (
 	"alfred-bot/cmd/bot/commands/rotacommand/models/metadata"
 	"alfred-bot/cmd/bot/commands/rotacommand/models/rotadetails"
 	"alfred-bot/utils/formatter"
+	"alfred-bot/utils/slackclient"
 	"fmt"
 	"github.com/slack-go/slack"
 	"log"
@@ -34,11 +35,11 @@ const (
 )
 
 type RotaCommand struct {
-	handler *handler.RotaHandler
-	client  *slack.Client
+	handler handler.CommandHandler
+	client  slackclient.SlackClient
 }
 
-func New(handler *handler.RotaHandler, client *slack.Client) *RotaCommand {
+func New(handler handler.CommandHandler, client slackclient.SlackClient) *RotaCommand {
 	return &RotaCommand{
 		handler: handler,
 		client:  client,
@@ -71,7 +72,7 @@ func (c *RotaCommand) HandleEndOfOnCallShifts() {
 					attachment := slack.Attachment{}
 					attachment.Text = fmt.Sprintf("[%v] %s now on duty!", v.Sk, formatter.AtUserId(nextOnCallMember))
 					attachment.Color = "#4af030"
-					_, _, err = c.client.PostMessage(v.Pk, slack.MsgOptionAttachments(attachment))
+					_, _, err = c.client.PostMessage(v.Pk, attachment)
 					if err != nil {
 						log.Println(err)
 					}
@@ -94,17 +95,20 @@ func (c *RotaCommand) StartRotaPrompt(interaction *slack.InteractionCallback, ac
 
 	var unableToStartRotaErr string
 
-	rotaMembers := rotaDetails.Members
-	if len(rotaMembers) == 0 {
-		unableToStartRotaErr = "Sorry, I can't start an empty rota!"
-	}
+	if rotaDetails == nil {
+		unableToStartRotaErr = "Sorry, I can't start an invalid rota!"
+	} else {
+		if len(rotaDetails.Members) == 0 {
+			unableToStartRotaErr = "Sorry, I can't start an empty rota!"
+		}
 
-	if rotaDetails.Duration == 0 {
-		unableToStartRotaErr = "Sorry, I can't start a rota without a shift duration!"
-	}
+		if rotaDetails.Duration == 0 {
+			unableToStartRotaErr = "Sorry, I can't start a rota without a shift duration!"
+		}
 
-	if rotaDetails.CurrOnCallMember != "" {
-		unableToStartRotaErr = fmt.Sprintf("[%s] %s is already currently on duty!", rotaName, formatter.AtUserId(rotaDetails.CurrOnCallMember))
+		if rotaDetails.CurrOnCallMember != "" {
+			unableToStartRotaErr = fmt.Sprintf("[%s] %s is already currently on duty!", rotaName, formatter.AtUserId(rotaDetails.CurrOnCallMember))
+		}
 	}
 
 	if unableToStartRotaErr != "" {
@@ -121,6 +125,8 @@ func (c *RotaCommand) StartRotaPrompt(interaction *slack.InteractionCallback, ac
 
 		return nil
 	}
+
+	rotaMembers := rotaDetails.Members
 
 	titleText := slack.NewTextBlockObject(slack.PlainTextType, "Start a shift", false, false)
 	closeText := slack.NewTextBlockObject(slack.PlainTextType, "Close", false, false)
@@ -209,7 +215,7 @@ func (c *RotaCommand) StopRota(interaction *slack.InteractionCallback, action *s
 	attachment := slack.Attachment{}
 	attachment.Text = fmt.Sprintf("[%v] %s is now off duty!", rotaName, formatter.AtUserId(rotaDetails.CurrOnCallMember))
 	attachment.Color = "#4af030"
-	_, _, err = c.client.PostMessage(channelId, slack.MsgOptionAttachments(attachment))
+	_, _, err = c.client.PostMessage(channelId, attachment)
 	if err != nil {
 		return err
 	}
@@ -402,7 +408,7 @@ func (c *RotaCommand) StartRota(interaction *slack.InteractionCallback) error {
 	attachment := slack.Attachment{}
 	attachment.Text = fmt.Sprintf("[%v] %s is now on duty!", metadata.RotaName, formatter.AtUserId(onCallMember))
 	attachment.Color = "#4af030"
-	_, _, err = c.client.PostMessage(metadata.ChannelId, slack.MsgOptionAttachments(attachment))
+	_, _, err = c.client.PostMessage(metadata.ChannelId, attachment)
 	if err != nil {
 		return err
 	}
@@ -618,7 +624,7 @@ func (c *RotaCommand) upsertRotaPrompt(channelId string, triggerId string, rotaN
 }
 
 func (c *RotaCommand) respondToClient(channelId string, userId string, payload *slack.Attachment) error {
-	_, err := c.client.PostEphemeral(channelId, userId, slack.MsgOptionAttachments(*payload))
+	_, err := c.client.PostEphemeral(channelId, userId, *payload)
 	if err != nil {
 		return err
 	}

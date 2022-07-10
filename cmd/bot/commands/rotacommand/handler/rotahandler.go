@@ -12,6 +12,14 @@ import (
 	"time"
 )
 
+type CommandHandler interface {
+	GetRotaNames(channelId string) ([]string, error)
+	GetRotaDetails(channelId string, rotaName string) (*rotadetails.RotaDetails, error)
+	GetEndingOnCallShifts() ([]*rotadetails.RotaDetails, error)
+	SaveRotaDetails(channelId string, rotaName string, rotaMembers []string, rotaDuration string) error
+	UpdateOnCallMember(channelId string, rotaName string, newOnCallMember string, startOfShift string, endOfShift string) error
+}
+
 type RotaHandler struct {
 	db *db.Database
 }

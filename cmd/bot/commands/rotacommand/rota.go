@@ -357,7 +357,7 @@ func (c *RotaCommand) CreateRota(interaction *slack.InteractionCallback) error {
 		return err
 	}
 
-	if rotaDetails.Pk != "" {
+	if rotaDetails != nil {
 		attachment := slack.Attachment{}
 		attachment.Text = fmt.Sprintf("Oops, %s already exists!", rotaName)
 		attachment.Color = "#f0303a"
